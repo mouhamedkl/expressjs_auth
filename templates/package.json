@@ -1,7 +1,7 @@
 {
   "name": "express-app",
   "version": "1.0.0",
-  "description": "authexpress is a fast and flexible authentication solution for Express.js, supporting MySQL and MongoDB with JWT integration.",
+  "description": "expressjs_auth is a fast and flexible authentication solution for Express.js, supporting MySQL and MongoDB with JWT integration.",
   "main": "index.js",
   "dependencies": {
     "bcrypt": "^5.1.1",

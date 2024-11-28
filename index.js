@@ -695,7 +695,7 @@ const answers = await inquirer.prompt([
     },
 ]);
 // console.log('Installing dependencies...');
-// require('child_process').execSync('npm install simplenode_auth', { stdio: 'inherit' });
+// require('child_process').execSync('npm install expressjs_auth', { stdio: 'inherit' });
 await createProject(projectName, answers);
         } catch (error) {
 console.error(`❌ Une erreur est survenue : ${error.message}`);
