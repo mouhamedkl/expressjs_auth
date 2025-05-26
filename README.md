@@ -7,7 +7,6 @@ expressjs_auth is a simple, flexible, and fast solution for creating Express.js 
 - **Database Support**: Easily connect your project to either MySQL or MongoDB.
 - **JWT Authentication**: Secure authentication using JSON Web Tokens (JWT).
 - **User Registration and Login**: Prebuilt endpoints for user sign-up and login with password encryption.
-- **Role-based Access Control**: Manage user roles and permissions to secure your routes.
 - **Quick Setup**: Create and configure a fully functional authentication system with minimal effort.
 
 ## Installation
