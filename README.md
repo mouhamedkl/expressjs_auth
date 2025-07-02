@@ -29,8 +29,9 @@ cd name-project
 npm install
 ```
 3. Configure email credentials in the .env file:
-EMAIL_USER=ton.email@gmail.com
-EMAIL_PASS=ton_mot_de_passe_app
+
+- *EMAIL_USER=ton.email@gmail.com*
+- *EMAIL_PASS=ton_mot_de_passe_app*
 
 4. Run the server:
 ```bash
