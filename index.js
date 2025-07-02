@@ -21,7 +21,7 @@ const createProject = async (projectName, answers) => {
 
 
         const srcPath = path.join(projectPath, 'src');
-        ['controllers', 'middlewares', 'models', 'routes', 'services', 'config'].forEach((dir) => {
+        ['controllers', 'utils' , 'middlewares', 'models', 'routes', 'services', 'config'].forEach((dir) => {
           fs.mkdirSync(path.join(srcPath, dir), { recursive: true });
         });
 
@@ -31,13 +31,13 @@ const createProject = async (projectName, answers) => {
                 process.exit(1);
         }
         copyDirectory(templatePath, projectPath);
-        await generateDbConfig(projectPath, answers.db);
+        generateDbConfig(projectPath, answers.db);
         generateModel(projectPath, answers.db);
         generateService(projectPath, answers.db); 
         generateController(projectPath, answers.db);
-        generateRouter(projectPath, answers.db); 
+        generateRouter(projectPath); 
         replacePlaceholders(projectPath, answers);
-       
+        generateMailer(projectPath);
         authMiddlewareContent(projectPath)
         console.log(`✅ Le projet "${projectName}" a été créé avec succès à : ${projectPath}`);
     } catch (error) {
@@ -72,8 +72,9 @@ serviceContent = `
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const validator = require('validator'); 
+const { sendEmail } = require('../utils/mailer');
 const User = require('../models/user');
-
+const crypto = require('crypto');
 const userService = {
     register: async (userData) => {
         const { email, password } = userData;
@@ -101,11 +102,29 @@ const userService = {
         }
 
         // Hash du mot de passe
+        const verificationToken = crypto.randomBytes(32).toString('hex');
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = { email, password: hashedPassword };
+        const user = { email, password: hashedPassword, is_verified: false, verification_token: verificationToken };
 
         // Création de l'utilisateur
-        return User.create(user);
+        await User.create(user);
+     const verifyLink = \`\${process.env.FRONTEND_URL || 'http://localhost:3000'}/api/verify-email?token=\${verificationToken}\`;
+
+        await sendEmail(email, 'Vérifiez votre compte', \`
+            <h3>Bienvenue !</h3>
+            <p>Merci de vous être inscrit. Veuillez vérifier votre adresse en cliquant ci-dessous :</p>
+            <a href="\${verifyLink}">Vérifier mon email</a>
+        \`);
+
+        return { message: 'Utilisateur créé. Vérifiez votre email.' };
+    },
+
+    verifyEmail: async (token) => {
+        const user = await User.findByToken(token);
+        if (!user) throw new Error('Token invalide');
+
+        await User.verifyUser(user.id);
+        return { message: 'Email vérifié avec succès.' };
     },
 
     GetUserById: async (id) => {
@@ -131,7 +150,7 @@ const userService = {
         if (!user) {
             throw new Error('Utilisateur non trouvé');
         }
-
+        if (!user.is_verified) throw new Error('Email non vérifié');
         // Vérification du mot de passe
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
@@ -155,6 +174,8 @@ break;
 serviceContent = `
 const User = require('../models/user');
 const jwt = require('jsonwebtoken');
+const { sendEmail } = require('../utils/mailer');
+const crypto = require('crypto');
 const userService = {
     // Enregistrement d'un utilisateur
     register: async (userData) => {
@@ -167,9 +188,28 @@ const userService = {
         }
 
         // Création du nouvel utilisateur
-        const user = new User({ email, password });
+        const user = new User({ email, password, verification_token: crypto.randomBytes(32).toString('hex') ,is_verified: false });
         await user.save();
-        return user;
+
+        const verifyLink = \`\${process.env.FRONTEND_URL || 'http://localhost:3000'}/api/verify-email?token=\${user.verification_token}\`;
+
+        await sendEmail(email, 'Vérifiez votre compte', \`
+            <h3>Bienvenue !</h3>
+            <p>Merci de vous être inscrit. Veuillez vérifier votre adresse en cliquant ci-dessous :</p>
+            <a href="\${verifyLink}">Vérifier mon email</a>
+        \`);
+
+        return { message: 'Utilisateur créé. Vérifiez votre email.' };
+    },
+
+    verifyEmail: async (token) => {
+        const user = await User.findOne({ verification_token: token });
+        if (!user) throw new Error('Token invalide');
+        // Vérifier l'email
+        user.is_verified = true;
+        user.verification_token = null; // Supprimer le token pour éviter réutilisation
+        await user.save();
+        return { message: 'Email vérifié avec succès.' };
     },
 
     // Connexion d'un utilisateur
@@ -178,7 +218,7 @@ const userService = {
         if (!user) {
             throw new Error('Utilisateur non trouvé');
         }
-
+        if (!user.is_verified) throw new Error('Email non vérifié');
         const isValidPassword = await user.isPasswordValid(password);
         if (!isValidPassword) {
             throw new Error('Mot de passe incorrect');
@@ -251,6 +291,15 @@ const userController = {
             res.status(400).json({ message: error.message });
         }
     },
+     verifyEmail: async (req, res) => {
+        try {
+            const { token } = req.query;
+            const result = await userService.verifyEmail(token);
+            res.status(200).json(result); // message: "Email vérifié..."
+        } catch (error) {
+            res.status(400).json({ message: error.message });
+        }
+    },
     GetUserByIds: async (req, res) => {
         try {
             const id = req.params.id;
@@ -293,10 +342,31 @@ const login = async (req, res) => {
         res.status(400).send({ message: err.message });
     }
 };
-
+// Route de verification
+const verifyEmail = async (req, res) => {
+    try {
+        const { token } = req.query;
+        const result = await userService.verifyEmail(token);
+        res.status(200).send(result);
+    } catch (err) {
+        res.status(400).send({ message: err.message });
+    }
+};
+// route by id 
+const GetUserByIds = async (req, res) => {
+    try {
+        const id = req.params.id;
+        const user = await userService.findById(id);
+        res.status(200).send(user);
+    } catch (err) {
+        res.status(400).send({ message: err.message });
+    }
+};
 module.exports = {
     register,
-    login
+    login,
+    verifyEmail,
+    GetUserByIds
 };
 
 `;
@@ -311,12 +381,8 @@ return;
     console.log('✅ Contrôleur utilisateur créé avec succès.');
 };
 
-const generateRouter = (projectPath, dbChoice) => {
-    let routerContent = '';
-    switch (dbChoice) {
-        case 'MySQL':
-routerContent= `
-
+const generateRouter = (projectPath) => {
+    const routerContent = `
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
@@ -328,41 +394,21 @@ router.post('/register', userController.register);
 // Route pour se connecter (login) un utilisateur
 router.post('/login', userController.login);
 
-// Route protégée par authMiddleware
+// Route pour vérifier l'email d'un utilisateur
+router.get('/verify-email', userController.verifyEmail);
+
+// Route protégée
 router.get('/getuserbyid/:id', authMiddleware, userController.GetUserByIds);
 
 module.exports = router;
-`
-        case 'MongoDB':
-routerContent = `
-const express = require('express');
-const router = express.Router();
-const userController = require('../controllers/userController');
-const authMiddleware = require('../middlewares/authMiddleware');
-
-// Route pour enregistrer un utilisateur
-router.post('/register', userController.register);
-
-// Route pour se connecter (login) un utilisateur
-router.post('/login', userController.login);
-
-// Route protégée par authMiddleware
-router.get('/getuserbyid/:id', authMiddleware, (req, res) => {
-    res.status(200).send({ message: 'Vous êtes authentifié', user: req.user });
-});
-module.exports = router;
 `;
-break;
-        default:
-console.log('Routeur utilisateur non pris en charge pour cette base de données');
-return;
-    }
 
     const routerPath = path.join(projectPath, 'src', 'routes', 'userRouter.js');
     fs.writeFileSync(routerPath, routerContent, 'utf-8');
     console.log('✅ Routeur utilisateur créé avec succès.');
 };
-const replacePlaceholders = (projectPath, answers) => {
+
+const replacePlaceholders = async (projectPath, answers) => {
     const envFile = path.join(projectPath, '.env');
     const Dokcerfile = path.join(projectPath, 'src', 'Dockerfile');
     if (fs.existsSync(Dokcerfile)) {
@@ -424,7 +470,7 @@ const generateDbConfig = (projectPath, dbChoice) => {
 dbConfigContent = `
 
 const mysql = require('mysql');
-
+require('dotenv').config();
 // Configuration de la connexion
 const connection = mysql.createConnection({
   host: process.env.DB_HOST || 'localhost',
@@ -457,11 +503,8 @@ connection.connect((err) => {
             process.exit(1);
         }
               console.log("Connecté à la base de données " + dbName);
- const createTableQuery = "CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY,email VARCHAR(255) NOT NULL UNIQUE,password VARCHAR(255) NOT NULL UNIQUE,     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-         
-          
-    
-      
+ const createTableQuery = "CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY,email VARCHAR(255) NOT NULL UNIQUE,is_verified BOOLEAN DEFAULT FALSE,verification_token VARCHAR(255) NOT NULL UNIQUE,password VARCHAR(255) NOT NULL UNIQUE,     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+
       connection.query(createTableQuery, (err, result) => {
         if (err) {
           console.error('Erreur lors de la création de la table:', err);
@@ -484,6 +527,7 @@ break;
         case 'MongoDB':
 dbConfigContent = `
 const mongoose = require('mongoose');
+require('dotenv').config();
 const url = "mongodb://localhost:27017/" + process.env.DB_NAME
 mongoose.connect(url)
 .then(() => {
@@ -518,19 +562,36 @@ const db = require('../config/db');
 // Création du modèle User pour interagir avec la base de données
 const User = {
     create: (userData) => {
-        const { email, password } = userData;
+        const { email, password, is_verified, verification_token } = userData;
         return new Promise((resolve, reject) => {
-const query = 'INSERT INTO users (email, password) VALUES (?, ?)';
-db.query(query, [email, password], (err, result) => {
-    if (err) {
-        reject(err);
-    } else {
-        resolve(result);
+            const query = 'INSERT INTO users (email, password, is_verified, verification_token) VALUES (?, ?, ?, ?)';
+            db.query(query, [email, password, is_verified, verification_token], (err, result) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(result);
     }
 });
         });
     },
-
+findByToken: (token) => {
+    return new Promise((resolve, reject) => {
+        const query = 'SELECT * FROM users WHERE verification_token = ?';
+        db.query(query, [token], (err, result) => {
+            if (err) reject(err);
+            else resolve(result[0]);
+        });
+    });
+},
+verifyUser: (id) => {
+    return new Promise((resolve, reject) => {
+        const query = 'UPDATE users SET is_verified = true, verification_token = NULL WHERE id = ?';
+        db.query(query, [id], (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        });
+    });
+},
     findByEmail: (email) => {
         return new Promise((resolve, reject) => {
 const query = 'SELECT * FROM users WHERE email = ?';
@@ -580,6 +641,13 @@ const userSchema = new mongoose.Schema({
             },
             message: props => props.value +" n'est pas un email valide!"
         }
+    },
+    verification_token: {
+        type: String
+    },
+    is_verified: {
+        type: Boolean,
+        default: false
     },
     password: {
         type: String,
@@ -653,6 +721,53 @@ module.exports = authMiddleware;
     
 
 }
+const generateMailer = (projectPath) => {
+    const mailerContent = `
+const nodemailer = require('nodemailer');
+require('dotenv').config(); // Chargement du fichier .env
+
+// Création du transporteur SMTP avec host/port
+const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.EMAIL_PORT) || 587,
+    secure: process.env.EMAIL_PORT === '465', // ✔️ uniquement true si port = 465
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
+/**
+ * Envoyer un email
+ * @param {string} to - Adresse email du destinataire
+ * @param {string} subject - Sujet de l’email
+ * @param {string} html - Contenu HTML de l’email
+ */
+const sendEmail = async (to, subject, html) => {
+    try {
+        await transporter.sendMail({
+            from: \`"Support" <\${process.env.EMAIL_USER}>\`,
+            to,
+            subject,
+            html
+        });
+        console.log(\`📧 Email envoyé à \${to}\`);
+    } catch (error) {
+        console.error('❌ Erreur envoi email :', error.message);
+    }
+};
+
+module.exports = { sendEmail };
+
+`;
+
+    const utilsDir = path.join(projectPath, 'src', 'utils');
+    const mailerPath = path.join(utilsDir, 'mailer.js');
+
+
+    fs.writeFileSync(mailerPath, mailerContent, 'utf-8');
+    console.log('✅ Fichier mailer.js généré avec succès.');
+};
 
 program
     .command('create <project-name>')
